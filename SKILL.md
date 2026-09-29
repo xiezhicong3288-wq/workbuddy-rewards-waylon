@@ -1,7 +1,7 @@
 ---
 name: workbuddy-rewards
 description: "Claim one local user's WorkBuddy daily rewards: the gas-station check-in and the Buddy travel cycle. Use when the user mentions WorkBuddy积分、签到、Buddy旅行、派猫猫 or a recurring daily reward check."
-description_zh: "自动领取 WorkBuddy 每日积分：签到与 Buddy 旅行"
+description_zh: "自动领取 WorkBuddy 签到与旅行积分"
 description_en: "Claim WorkBuddy daily credits: check-in and Buddy travel"
 ---
 

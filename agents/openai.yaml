@@ -1,4 +1,4 @@
 interface:
   display_name: "WorkBuddy 积分助手"
-  short_description: "自动领取 WorkBuddy 每日积分：签到与 Buddy 旅行"
+  short_description: "自动领取 WorkBuddy 签到与旅行积分"
   default_prompt: "Use $workbuddy-rewards to check and complete my WorkBuddy daily reward tasks."

@@ -1,4 +1,5 @@
 logs/
+_user_meta.json
+.runtime-cache
 __pycache__/
 *.pyc
-.runtime-cache

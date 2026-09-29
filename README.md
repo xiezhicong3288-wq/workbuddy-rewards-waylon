@@ -1,6 +1,6 @@
 # workbuddy-rewards
 
-自动领取 WorkBuddy 每日积分：签到与 Buddy 旅行。
+自动领取 WorkBuddy 签到与旅行积分。
 
 ## 安装
 
