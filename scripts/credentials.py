@@ -156,11 +156,20 @@ def _candidate_paths() -> list[Path]:
     ]
 
 
+def has_local_session() -> bool:
+    """True only on the desktop that holds the WorkBuddy login state."""
+    return any(path.is_file() for path in _candidate_paths())
+
+
 def find_auth_file() -> Path:
     for path in _candidate_paths():
         if path.is_file():
             return path
-    raise CredentialError("NO_AUTH_FILE", "未找到 WorkBuddy 本地登录态；请先打开客户端并登录")
+    raise CredentialError(
+        "NO_AUTH_FILE",
+        "未找到 WorkBuddy 本地登录态。若当前运行在手机端或云端沙箱，请切换为「连接电脑」模式，"
+        "让桌面端 WorkBuddy 执行本技能；或在电脑上打开 WorkBuddy 登录一次。",
+    )
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -394,7 +403,11 @@ def find_runtime() -> Path:
     if found:
         _write_runtime_cache(found)
         return found
-    raise CredentialError("RUNTIME_NOT_FOUND", "未找到 WorkBuddy 客户端；可用 WORKBUDDY_EXE 指定路径")
+    raise CredentialError(
+        "RUNTIME_NOT_FOUND",
+        "未找到 WorkBuddy 桌面客户端，无法解密登录态。若当前运行在手机端或云端沙箱，"
+        "请切换为「连接电脑」模式在桌面端执行；否则可用 WORKBUDDY_EXE 指定 WorkBuddy.exe 路径。",
+    )
 
 
 def _running_windows_runtime() -> Path | None:
@@ -476,7 +489,12 @@ def inspect_auth() -> dict[str, Any]:
     if not isinstance(auth, dict) or not isinstance(account, dict) or not account.get("uid"):
         raise CredentialError("NO_SESSION", "本地登录态缺少当前账号信息；请重新登录 WorkBuddy")
     kind = _token_format(auth.get("accessToken"))
-    result: dict[str, Any] = {"status": "ready", "credential_format": kind, "online_checked": False}
+    result: dict[str, Any] = {
+        "status": "ready",
+        "credential_format": kind,
+        "environment": "desktop" if has_local_session() else "unknown",
+        "online_checked": False,
+    }
     if kind == "sym-v1":
         probe = _run_helper({"operation": "probe"})
         result["runtime_ready"] = True

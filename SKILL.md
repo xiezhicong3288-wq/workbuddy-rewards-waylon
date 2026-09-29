@@ -63,6 +63,18 @@ Practical rules:
 
 Never claim resources that do not exist: no lottery, make-up card, task-invite, referral, multi-account, or other growth-center actions.
 
+## Where this skill can run
+
+This skill drives a **desktop** WorkBuddy install: it reads that machine's login state and decrypts it with the desktop client binary.
+
+- **桌面端**：完整可用。
+- **手机 App「连接电脑」模式**：可用——手机只负责下发指令，真正执行的是桌面端，两侧需登录同一微信账号。
+- **手机 App「云端工作」模式 / 任何云端沙箱**：**不可用**。脚本会以 `NO_AUTH_FILE` 或 `RUNTIME_NOT_FOUND` 退出，并提示切换到「连接电脑」模式。这是预期行为而非故障：**不要**为适配云端而改写逻辑、伪造凭据或改用其它凭据来源。
+
+WorkBuddy 的几种安装方式（SkillHub 市场、ZIP 导入、Git 仓库导入、`.skill.json` 拖拽、对话安装）都可以用于**安装**本技能。注意 **本地 ZIP 上传仅支持电脑端**；想从手机安装，需要先把它发布到 SkillHub 市场。
+
+## Security invariants
+
 - Read only the current OS user's WorkBuddy session file. Do not copy, persist, print, summarize, or transmit access/refresh tokens.
 - Network requests are restricted in code to known WorkBuddy/Tencent hosts and the documented check-in/travel paths.
 - The encrypted credential helper may invoke the locally installed WorkBuddy executable in Node mode; the encrypted field enters over stdin and the decrypted access token returns only through an in-memory pipe.
