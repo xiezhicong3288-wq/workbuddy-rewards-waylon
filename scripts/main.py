@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import checkin
+import schedule
 import travel
 from credentials import CredentialError, inspect_auth, load_session
 from http_client import WorkBuddyClient
@@ -26,8 +27,10 @@ SAFE_LOG_KEYS = {
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="WorkBuddy daily check-in and Buddy travel helper")
-    parser.add_argument("command", choices=("doctor", "status", "checkin", "travel", "all"))
+    parser.add_argument("command", choices=("doctor", "status", "checkin", "travel", "all", "schedule"))
     parser.add_argument("--location", help="Buddy travel location id or code")
+    parser.add_argument("--from", dest="start", default="09:30", help="with schedule: when the machine turns on (HH:MM)")
+    parser.add_argument("--to", dest="end", default="18:30", help="with schedule: when it turns off (HH:MM)")
     parser.add_argument("--no-log", action="store_true", help="do not append the sanitized result log")
     parser.add_argument("--loop", action="store_true", help="with travel/all: keep claiming and re-dispatching until the travel limit is reached")
     parser.add_argument("--max-hours", type=float, default=12.0, help="with --loop: stop after this many hours (default 12)")
@@ -57,6 +60,8 @@ def _append_log(result: dict[str, Any]) -> None:
 
 
 def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    if args.command == "schedule":
+        raise SystemExit(schedule.main([f"--from={args.start}", f"--to={args.end}"]))
     if args.command == "doctor":
         return 0, {"task": "doctor", **inspect_auth()}
     session = load_session()

@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 import checkin  # noqa: E402
 import credentials  # noqa: E402
 import main  # noqa: E402
+import schedule  # noqa: E402
 import travel  # noqa: E402
 from http_client import Response  # noqa: E402
 
@@ -249,6 +250,42 @@ class TravelLocationTests(unittest.TestCase):
         self.assertEqual(travel._pick_location(locations, "mall")["id"], 2)
         self.assertIsNone(travel._pick_location([{"name": "broken"}], None))
         self.assertIsNone(travel._pick_location("not-a-list", None))
+
+
+class ScheduleTests(unittest.TestCase):
+    def test_nine_hour_window_gets_three_hour_cadence(self):
+        result = schedule.recommend("09:30", "18:30")
+        self.assertEqual(result["strategy"], "cadence")
+        self.assertEqual(result["rrule"], "FREQ=HOURLY;INTERVAL=3")
+        self.assertEqual(result["slots"], ["09:30", "12:30", "15:30", "18:30"])
+        self.assertEqual(result["create_at"], "06:30")
+        self.assertIn("--loop", result["command"])
+
+    def test_short_window_falls_back_to_one_run(self):
+        result = schedule.recommend("20:00", "23:00")
+        self.assertEqual(result["strategy"], "single_run")
+        self.assertEqual(result["slots"], ["20:00"])
+        self.assertLess(result["max_hours"], 3)
+
+    def test_window_may_cross_midnight(self):
+        result = schedule.recommend("22:00", "02:00")
+        self.assertEqual(result["window_hours"], 4.0)
+        self.assertEqual(result["strategy"], "single_run")
+
+    def test_end_of_day_is_accepted(self):
+        result = schedule.recommend("08:00", "24:00")
+        self.assertEqual(result["window"], "08:00-24:00")
+        self.assertEqual(result["strategy"], "cadence")
+
+    def test_bad_clock_is_rejected(self):
+        for value in ("25:00", "9:70", "abc", "24:30"):
+            with self.assertRaises(ValueError):
+                schedule.parse_clock(value)
+
+    def test_render_mentions_every_slot(self):
+        text = schedule.render(schedule.recommend("09:30", "18:30"))
+        for slot in ("09:30", "12:30", "15:30", "18:30"):
+            self.assertIn(slot, text)
 
 
 class SecurityTests(unittest.TestCase):

@@ -20,6 +20,7 @@ Locate `scripts/main.py` relative to this file (normally `~/.workbuddy/skills/wo
 | Buddy旅行、派猫猫、旅行领奖 | `travel` |
 | 明确要求完成今天全部积分任务 | `all` |
 | 登录态或安装排障 | `doctor`（离线，不解密令牌） |
+| 要建/改定时、问多久跑一次 | `schedule --from <开机> --to <关机>`（离线，只算数） |
 
 ```bash
 python "$HOME/.workbuddy/skills/workbuddy-rewards/scripts/main.py" status
@@ -34,6 +35,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.workbuddy
 ```
 
 Options: `--location <id|code>`, `--loop`, `--max-hours <h>`, `--poll-seconds <s>`, `--no-log`.
+
+When the user asks how often to run this, or wants a schedule created or changed, run
+`schedule` with their uptime window first (`... main.py schedule --from 09:30 --to 18:30`)
+and follow its rrule and `--max-hours` instead of guessing a cadence. Copy the ready-made
+prompt from [references/automation-prompt.md](references/automation-prompt.md) and fill in
+the interpreter path, the script path, and the recommended `--max-hours`.
 
 ## Read the result
 
