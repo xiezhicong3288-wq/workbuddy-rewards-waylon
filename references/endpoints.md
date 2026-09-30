@@ -16,6 +16,8 @@ The preferred host is derived from `auth.endpoint` or `auth.domain` in the local
 
 `today_checked_in` has been inconsistent across client versions. A claim response with business code `10001` or a message containing `已签到`/`already checked` is therefore treated as the authoritative idempotent result.
 
+Check-in runs in **seasons** with their own `start_time` / `end_time` and `season` number. Observed on 2026-09-30: season 9 ended 2026-09-29, season 10 started 2026-09-30. **When a season rolls over, `streak_days` restarts at 1 and `total_credits` restarts from that season's earnings** — this is not a failure. `total_credits` is a per-season figure, not a lifetime balance, so never report a drop across a season boundary as lost credits. A `success` response can legitimately omit `total_credits` on the first day of a season.
+
 ## Buddy travel
 
 Preferred paths use `/v2/activity/growth`:
@@ -54,6 +56,8 @@ Enumerated against the WorkBuddy desktop bundle (`resources/app.asar`) and confi
 - `/v2/activity/growth/buddy/info` — pet appearance plus `poll_interval_seconds`; no rewards.
 - `/v2/activity/banner`, `/v2/activity/workbuddy/banner` — promotional banners (`activity is offline`).
 - `/activity/workbuddy/invitation/*`, `/console/activity/ambassador/status` — referral flows, permanently out of scope.
+
+Measured on 2026-09-29: `daily_limit_reached` turns `true` immediately after the first departure and remains `true` after claiming, with status back to `idle`. **One trip per day.** Plan for a single dispatch plus a single claim per day rather than continuous polling.
 
 All travel locations return the same payout band (`reward_credit_min` 5 / `reward_credit_max` 10, `duration_hours_min` 1 / `duration_hours_max` 4), so location choice does not change expected yield. Total yield depends on how soon an arrival is claimed and a new trip dispatched, which is what `--loop` optimizes.
 

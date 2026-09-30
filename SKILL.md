@@ -49,6 +49,7 @@ A status-only request never authorizes `checkin`, `travel`, or `all` — those m
 ## What actually earns credits
 
 - **签到** — once per day, 100 credits. Idempotent, never double-claims. Streak and weekly bonuses are granted server-side with no separate claim step.
+- Check-in runs in dated **seasons**. When one rolls over, `streak_days` restarts at 1 and `total_credits` resets to that season's earnings — **not lost credits**. Never report the reset as a problem, and expect `total_credits` to be missing on a season's first day.
 - **旅行** — claim on arrival, then dispatch again. One trip per day, so the practical routine is: check in, dispatch once, claim that one arrival. Two to four runs a day is enough; running hourly earns nothing extra.
 - All four locations pay the same and last the same (5–10 credits, 1–4 hours), so there is no location to optimize — only the gap between arrival and the next dispatch, which is what `--loop` reduces.
 - `--loop` chains cycles in one foreground session (`... all --loop --max-hours 8 --poll-seconds 60`). It stops at the daily limit, when the window elapses, or on the first real failure. Use it only when the user asks for a maximization session.
