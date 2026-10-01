@@ -12,6 +12,7 @@ from typing import Any
 
 import checkin
 import schedule
+import tasks
 import travel
 from credentials import CredentialError, inspect_auth, load_session
 from http_client import WorkBuddyClient
@@ -22,13 +23,20 @@ SAFE_LOG_KEYS = {
     "reward_credit", "record_id", "location", "location_id", "arrive_at",
     "remaining_seconds", "daily_limit_reached", "http_status", "business_code",
     "transitions", "claimed_credit",
+    # growth task board
+    "tasks", "total", "claimed_count", "claimable", "claimable_credit",
+    "unopened", "unopened_credit", "waiting", "waiting_credit", "accepted",
+    "claimed", "pending", "pending_credit", "task_code", "title", "progress",
+    "locked", "hint", "errors", "message",
 }
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="WorkBuddy daily check-in and Buddy travel helper")
-    parser.add_argument("command", choices=("doctor", "status", "checkin", "travel", "all", "schedule"))
+    parser = argparse.ArgumentParser(description="WorkBuddy daily check-in, Buddy travel and growth task helper")
+    parser.add_argument("command", choices=("doctor", "status", "checkin", "travel", "tasks", "all", "schedule"))
     parser.add_argument("--location", help="Buddy travel location id or code")
+    parser.add_argument("--claim", action="store_true", help="with tasks: also accept unopened tasks and claim finished rewards")
+    parser.add_argument("--no-accept", action="store_true", help="with tasks --claim: only claim, never accept new tasks")
     parser.add_argument("--from", dest="start", default="09:30", help="with schedule: when the machine turns on (HH:MM)")
     parser.add_argument("--to", dest="end", default="18:30", help="with schedule: when it turns off (HH:MM)")
     parser.add_argument("--no-log", action="store_true", help="do not append the sanitized result log")
@@ -42,7 +50,7 @@ def _safe_summary(value: Any) -> Any:
     if isinstance(value, list):
         return [_safe_summary(item) for item in value]
     if isinstance(value, dict):
-        return {key: _safe_summary(item) for key, item in value.items() if key in SAFE_LOG_KEYS or key in {"checkin", "travel"}}
+        return {key: _safe_summary(item) for key, item in value.items() if key in SAFE_LOG_KEYS or key in {"checkin", "travel", "tasks"}}
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
@@ -69,9 +77,12 @@ def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     if args.command == "status":
         ccode, cresult = checkin.status(client)
         tcode, tresult = travel.status(client)
-        return max(ccode, tcode), {"checkin": cresult, "travel": tresult}
+        kcode, kresult = tasks.status(client)
+        return max(ccode, tcode, kcode), {"checkin": cresult, "travel": tresult, "tasks": kresult}
     if args.command == "checkin":
         return checkin.run(client)
+    if args.command == "tasks":
+        return tasks.run(client, accept=not args.no_accept) if args.claim else tasks.status(client)
     if args.command == "travel":
         if args.loop:
             return travel.run_loop(client, args.location, args.max_hours, args.poll_seconds)
@@ -81,7 +92,8 @@ def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         tcode, tresult = travel.run_loop(client, args.location, args.max_hours, args.poll_seconds)
     else:
         tcode, tresult = travel.run(client, args.location)
-    return max(ccode, tcode), {"checkin": cresult, "travel": tresult}
+    kcode, kresult = tasks.run(client, accept=True)
+    return max(ccode, tcode, kcode), {"checkin": cresult, "travel": tresult, "tasks": kresult}
 
 
 def main(argv: list[str] | None = None) -> int:

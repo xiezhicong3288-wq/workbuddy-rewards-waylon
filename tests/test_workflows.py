@@ -13,8 +13,10 @@ sys.path.insert(0, str(SCRIPTS))
 
 import checkin  # noqa: E402
 import credentials  # noqa: E402
+import http_client  # noqa: E402
 import main  # noqa: E402
 import schedule  # noqa: E402
+import tasks  # noqa: E402
 import travel  # noqa: E402
 from http_client import Response  # noqa: E402
 
@@ -205,6 +207,124 @@ class RuntimeDiscoveryTests(unittest.TestCase):
                     credentials.find_runtime()
             finally:
                 os.environ.pop("WORKBUDDY_EXE", None)
+
+
+def _task(code: str, status: str = "not_accepted", current: int | None = None, target: int | None = None, **extra) -> dict:
+    task = {"task_code": code, "title": f"标题-{code}", "accept_status": status, "reward_credit": 100, **extra}
+    if current is not None:
+        task["progress"] = {"current": current, "target": target}
+    return task
+
+
+def _board(*items) -> Response:
+    return Response(200, {"data": {"tasks": list(items)}})
+
+
+class GrowthTaskTests(unittest.TestCase):
+    def test_status_is_read_only(self):
+        client = FakeClient([_board(_task("chat_5", "accepted", 1, 5), _task("first_buddy", "claimed", 1, 1))])
+        code, result = tasks.status(client)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(result["claimed_count"], 1)
+        self.assertEqual(result["waiting"], ["chat_5"])
+        self.assertEqual(result["unopened"], [])
+        self.assertEqual(client.calls[0][1], "/v2/activity/growth/tasks")
+
+    def test_accept_opens_unopened_tasks_then_refreshes(self):
+        client = FakeClient([
+            _board(_task("chat_5")),
+            Response(200, {"data": {"results": [{"task_code": "chat_5", "status": "accepted"}]}}),
+            _board(_task("chat_5", "accepted", 0, 5)),
+        ])
+        code, result = tasks.run(client)
+        self.assertEqual(code, 0)
+        self.assertEqual(result["accepted"], ["chat_5"])
+        self.assertEqual(result["status"], "nothing_to_claim")
+        self.assertEqual(client.calls[1][2], {"task_codes": ["chat_5"]})
+
+    def test_no_accept_leaves_tasks_untouched(self):
+        client = FakeClient([_board(_task("chat_5"))])
+        _, result = tasks.run(client, accept=False)
+        self.assertNotIn("accepted", result)
+        self.assertEqual(len(client.calls), 1)
+
+    def test_locked_tasks_are_never_accepted(self):
+        client = FakeClient([_board(_task("vip_only", locked=True))])
+        tasks.run(client)
+        self.assertEqual(len(client.calls), 1)
+
+    def test_completed_task_is_claimed_and_credited(self):
+        client = FakeClient([
+            _board(_task("chat_5", "completed", 5, 5)),
+            Response(200, {"data": {"credit": 100, "energy": 5}}),
+        ])
+        code, result = tasks.run(client)
+        self.assertEqual((code, result["status"], result["claimed_credit"]), (0, "claimed", 100))
+        self.assertEqual(client.calls[1][1], "/v2/activity/growth/tasks/chat_5/claim")
+        self.assertEqual(result["claimed"], [{"task_code": "chat_5", "title": "标题-chat_5", "reward_credit": 100}])
+
+    def test_claim_credit_falls_back_to_task_definition(self):
+        client = FakeClient([_board(_task("chat_5", "completed", 5, 5)), Response(200, {"data": {}})])
+        _, result = tasks.run(client)
+        self.assertEqual(result["claimed_credit"], 100)
+
+    def test_not_completed_is_pending_not_failure(self):
+        client = FakeClient([
+            _board(_task("chat_5", "completed", 5, 5), _task("template_5", "accepted", 1, 5)),
+            Response(400, {"code": 400, "msg": "task not completed"}),
+        ])
+        code, result = tasks.run(client)
+        self.assertEqual(code, 0)
+        self.assertEqual(result["status"], "nothing_to_claim")
+        self.assertEqual(result["claimable"], [])
+        self.assertEqual(result["waiting"], ["chat_5", "template_5"])
+
+    def test_already_claimed_is_normal(self):
+        client = FakeClient([
+            _board(_task("chat_5", "completed", 5, 5)),
+            Response(400, {"code": 400, "msg": "already claimed"}),
+        ])
+        code, result = tasks.run(client)
+        self.assertEqual((code, result["status"]), (0, "nothing_to_claim"))
+        self.assertNotIn("errors", result)
+
+    def test_unexpected_claim_error_is_reported(self):
+        client = FakeClient([
+            _board(_task("chat_5", "completed", 5, 5)),
+            Response(500, None),
+        ])
+        code, result = tasks.run(client)
+        self.assertEqual(code, 1)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["errors"][0]["reason"], "http_error")
+
+    def test_legacy_list_prefix_fallback(self):
+        client = FakeClient([Response(404, {}), _board(_task("chat_5"))])
+        code, result = tasks.status(client)
+        self.assertEqual(code, 0)
+        self.assertEqual(client.calls[1][1], "/activity/growth/tasks")
+
+    def test_malformed_rows_are_dropped(self):
+        client = FakeClient([Response(200, {"data": {"tasks": [
+            {"title": "no code"},
+            {"task_code": "bad/code", "accept_status": "not_accepted"},
+            {"task_code": "ok_task", "title": "ok", "accept_status": "not_accepted"},
+        ]}})])
+        code, result = tasks.status(client)
+        self.assertEqual(code, 0)
+        self.assertEqual(result["unopened"], ["ok_task"])
+
+    def test_claim_path_rejects_injected_codes(self):
+        session = credentials.Session(token="t", uid="u", domain=None, enterprise_id=None,
+                                      api_base="https://www.codebuddy.cn", credential_format="plaintext")
+        client = http_client.WorkBuddyClient(session)
+        for path in ("/activity/growth/tasks/../../evil/claim", "/activity/growth/tasks/a%20b/claim",
+                     "/console/user/from", "/v2/activity/growth/tasks/x/claim?admin=1"):
+            with self.assertRaises(ValueError):
+                client._url(path)
+        self.assertTrue(client._url("/activity/growth/tasks/chat_5/claim").endswith("/tasks/chat_5/claim"))
 
 
 class TravelLoopTests(unittest.TestCase):

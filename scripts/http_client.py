@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import ssl
 import time
 import urllib.error
@@ -26,7 +27,25 @@ ALLOWED_PATHS = {
     "/activity/growth/buddy/travel/config",
     "/activity/growth/buddy/travel/depart",
     "/activity/growth/buddy/travel/claim",
+    "/v2/activity/growth/tasks",
+    "/activity/growth/tasks",
+    "/v2/activity/growth/tasks/accept",
+    "/activity/growth/tasks/accept",
 }
+
+
+# Claiming takes the task code inside the path, so it is matched by pattern and the
+# code itself is always validated against the codes the task list returned.
+ALLOWED_PATH_PATTERNS = (
+    r"^/v2/activity/growth/tasks/[A-Za-z0-9_-]{1,64}/claim$",
+    r"^/activity/growth/tasks/[A-Za-z0-9_-]{1,64}/claim$",
+)
+
+
+def _path_allowed(path: str) -> bool:
+    if path in ALLOWED_PATHS:
+        return True
+    return any(re.fullmatch(pattern, path) for pattern in ALLOWED_PATH_PATTERNS)
 
 
 @dataclass(frozen=True)
@@ -54,7 +73,7 @@ class WorkBuddyClient:
         self.timeout = timeout
 
     def _url(self, path: str) -> str:
-        if path not in ALLOWED_PATHS:
+        if not _path_allowed(path):
             raise ValueError("endpoint is not allowlisted")
         base = urllib.parse.urlsplit(self.session.api_base)
         if base.scheme != "https" or base.hostname not in ALLOWED_HOSTS:

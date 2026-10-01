@@ -42,6 +42,23 @@ Field behavior confirmed against the live API (v2 prefix, 2026-09):
 - `arrive_at` and `server_now` are Unix seconds from the server clock. Derive countdowns from them rather than the local clock.
 - A second `travel` run while `traveling` must stay a read-only no-op; never re-depart.
 
+## Growth task center
+
+The 任务中心 lives at `https://www.workbuddy.cn/profile/growth-center` (an H5 page, not part of the desktop bundle). It talks to the same backend as everything else and works with the desktop bearer token on all three allowlisted hosts.
+
+- `GET /v2/activity/growth/tasks` — the whole board, no pagination, no parameters.
+- `POST /activity/growth/tasks/accept` with `{ "task_codes": [...] }` — opens progress tracking for one or many tasks (note: this suffix has no `/v2` sibling).
+- `POST /v2/activity/growth/tasks/{task_code}/claim` with `{}` — pays out one finished task. The code sits inside the path, so it is matched by pattern and cross-checked against the codes the list returned; anything else is refused before a request is built.
+
+A task row carries `task_code`, `title`, `task_desc` / `description`, `jump_url`, `reward_credit`, `accept_status`, `progress {current,target}`, `locked`. `accept_status` is one of `not_accepted`, `accepted`, `in_progress`, `completed`, `claimed`.
+
+Confirmed against the live API on 2026-10-01:
+
+- Accepting answers `{"results":[{"task_code":...,"status":"accepted"}]}` and flips the row from `not_accepted` to `accepted`.
+- **Counters are prospective only.** Immediately after accepting `chat_5`, progress was `0/5` even though the session had already chatted; `black_cat` went to `0/3`. Usage before acceptance is never back-filled, which is why accepting first is the whole point.
+- Claiming a task that is not completed answers HTTP 400 `{"code":400,"msg":"task not completed"}` — a safe refusal, never an error to surface as failure.
+- A list row can disappear between runs (`Model_chat_GLM5.2` vanished within an hour on 2026-10-01), so always treat the list as authoritative rather than a locally cached copy.
+
 ## Budget coverage
 
 Pay attention to the two different currencies; only the first one is "积分" and only it can be maximized here:
@@ -51,7 +68,7 @@ Pay attention to the two different currencies; only the first one is "积分" an
 
 Buddy 加油站 is the daily check-in itself, not a separate channel: `/v2/billing/meter/checkin-activity-status` reports `total_credits`, `streak_days`, `week_progress` and `streak_bonus_credit`, and streak/weekly bonuses are granted server-side with no extra claim endpoint. An `action_button` may advertise an unrelated expert-verification flow; ignore it.
 
-Enumerated against the WorkBuddy desktop bundle (`resources/app.asar`) and confirmed live on 2026-09: the check-in and Buddy travel endpoints above are the **only** credit-earning paths. Everything else found nearby is not claimable:
+Enumerated against the WorkBuddy desktop bundle (`resources/app.asar`) and confirmed live on 2026-09, with the H5 user-center bundle (`https://www.workbuddy.cn/profile/growth-center`) added on 2026-10-01: the check-in, Buddy travel and growth-task paths above are the credit-earning endpoints this skill uses. Everything else found nearby is deliberately left alone:
 
 - `/v2/activity/growth/buddy/info` — pet appearance plus `poll_interval_seconds`; no rewards.
 - `/v2/activity/banner`, `/v2/activity/workbuddy/banner` — promotional banners (`activity is offline`).

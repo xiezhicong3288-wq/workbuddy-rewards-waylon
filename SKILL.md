@@ -1,13 +1,15 @@
 ---
 name: workbuddy-rewards
-description: "Claim one local user's WorkBuddy daily rewards: the gas-station check-in and the Buddy travel cycle. Use when the user mentions WorkBuddy积分、签到、Buddy旅行、派猫猫 or a recurring daily reward check."
-description_zh: "自动领取 WorkBuddy 签到与旅行积分"
-description_en: "Claim WorkBuddy daily credits: check-in and Buddy travel"
+description: "Claim the local user's WorkBuddy credits: the daily gas-station check-in, the Buddy travel cycle, and the growth-center task board. Use when the user mentions WorkBuddy积分、签到、Buddy旅行、派猫猫、任务中心、成长计划、积分任务、去完成/领取 or a recurring daily reward check."
+description_zh: "自动签到、旅行与任务中心领积分"
+description_en: "Claim WorkBuddy credits: check-in, travel, growth tasks"
 ---
 
 # WorkBuddy 积分助手
 
-Two credit channels exist and this skill covers both: the daily **加油站签到** (100 credits) and the **Buddy 旅行** cycle (5–10 credits, one trip per day).
+Three credit channels exist and this skill covers all of them: the daily **加油站签到** (100 credits),
+the **Buddy 旅行** cycle (5–10 credits, one trip per day), and the **任务中心** task board
+(discrete "体验某某" tasks worth 50–300 credits each).
 
 ## Choose a command
 
@@ -18,6 +20,8 @@ Locate `scripts/main.py` relative to this file (normally `~/.workbuddy/skills/wo
 | 检查、查看、状态 | `status`（只读） |
 | 签到、领取签到积分 | `checkin` |
 | Buddy旅行、派猫猫、旅行领奖 | `travel` |
+| 任务中心、成长任务、有哪些任务待完成 | `tasks`（只读） |
+| 把能领的任务积分领掉 | `tasks --claim` |
 | 明确要求完成今天全部积分任务 | `all` |
 | 登录态或安装排障 | `doctor`（离线，不解密令牌） |
 | 要建/改定时、问多久跑一次 | `schedule --from <开机> --to <关机>`（离线，只算数） |
@@ -25,7 +29,7 @@ Locate `scripts/main.py` relative to this file (normally `~/.workbuddy/skills/wo
 ```bash
 python "$HOME/.workbuddy/skills/workbuddy-rewards/scripts/main.py" status
 python "$HOME/.workbuddy/skills/workbuddy-rewards/scripts/main.py" all
-python "$HOME/.workbuddy/skills/workbuddy-rewards/scripts/main.py" travel --location coffee
+python "$HOME/.workbuddy/skills/workbuddy-rewards/scripts/main.py" tasks --claim
 ```
 
 If `python` is not on `PATH`, use the bundled wrapper and bypass the execution policy (unsigned local scripts are refused by default on many Windows machines):
@@ -51,7 +55,7 @@ The script prints one JSON object and appends a sanitized one-line summary to `l
 - On exit `2`, tell the user to open WorkBuddy and sign in again. Never ask them to paste a token into chat.
 - On `RUNTIME_NOT_FOUND`, the client could not be located: run `doctor`, and re-run with `WORKBUDDY_EXE` set if it is installed somewhere unusual.
 
-A status-only request never authorizes `checkin`, `travel`, or `all` — those mutate the user's account, so ask first.
+A status-only request never authorizes `checkin`, `travel`, `all`, or `tasks --claim` — those mutate the user's account, so ask first. Plain `tasks` is always safe: it lists the board without writing.
 
 ## What actually earns credits
 
@@ -60,10 +64,15 @@ A status-only request never authorizes `checkin`, `travel`, or `all` — those m
 - **旅行** — claim on arrival, then dispatch again. One trip per day, so the practical routine is: check in, dispatch once, claim that one arrival. Two to four runs a day is enough; running hourly earns nothing extra.
 - All four locations pay the same and last the same (5–10 credits, 1–4 hours), so there is no location to optimize — only the gap between arrival and the next dispatch, which is what `--loop` reduces.
 - `--loop` chains cycles in one foreground session (`... all --loop --max-hours 8 --poll-seconds 60`). It stops at the daily limit, when the window elapses, or on the first real failure. Use it only when the user asks for a maximization session.
+- **任务中心** — each task pays 50–300 credits and has five states: `not_accepted → accepted → in_progress → completed → claimed`. Two rules govern everything:
+  - **Usage only counts after acceptance.** The counter starts at `0/n` on acceptance and never credits work done earlier, so run `tasks --claim` once before starting any 体验/聊天 style task, then again later to collect.
+  - **Only `completed` tasks pay.** Claiming anything else returns HTTP 400 `task not completed`, which the script reports as pending, not as a failure.
+- `tasks --claim` therefore does three things per run: accept every unopened task (one batched request), claim every completed one, and list what is still waiting with a `hint` describing the action. Tasks needing an action inside WorkBuddy (创建画布、召唤专家、真实对话) or outside it (关注公众号) stay listed — say which ones remain and what each needs; never claim they are done.
+- `Library_read` and similar "read/open/spend time in" tasks count a **client view event**, not an API call: driving the library through `space_api.py` leaves the counter at `0/1`, and opening the node URL yourself does complete it. Hand the user the node link instead of burning calls on it.
 
 **积分 (credits)** and **资源额度 (resource quota)** are different things: quota is the model allowance granted by the subscription plan and has nothing to claim. If the user mentions "平台奖励", ask which one they mean.
 
-Stay on the verified endpoints. Never add lottery, makeup-card, task-claim, invite, referral, multi-account, or other growth-center actions, and never probe undocumented paths.
+Stay on the verified endpoints listed in [references/endpoints.md](references/endpoints.md). Never add invite, referral, multi-account, lottery redemption, or Buddy-prize shipping actions, and never probe undocumented paths.
 
 ## Where it runs
 
