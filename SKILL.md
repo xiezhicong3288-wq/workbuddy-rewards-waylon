@@ -40,6 +40,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.workbuddy
 
 Options: `--location <id|code>`, `--loop`, `--max-hours <h>`, `--poll-seconds <s>`, `--no-log`.
 
+One run also gets a bounded **network** budget: `WORKBUDDY_BUDGET_SECONDS` (default 420, ceiling 540). It counts only time spent waiting on requests, never time spent sleeping between `--loop` polls, so waiting for a Buddy to arrive cannot starve the claim that follows. An unusable value falls back to the default and is reported as `budget_warning`.
+
 When the user asks how often to run this, or wants a schedule created or changed, run
 `schedule` with their uptime window first (`... main.py schedule --from 09:30 --to 18:30`)
 and follow its rrule and `--max-hours` instead of guessing a cadence. Copy the ready-made
@@ -51,6 +53,7 @@ the interpreter path, the script path, and the recommended `--max-hours`.
 The script prints one JSON object and appends a sanitized one-line summary to `logs/result.log` unless `--no-log` is given. Summarize the outcome for the user.
 
 - `already_checked`, `already_claimed`, `traveling`, `daily_limit_reached` are normal idempotent outcomes, not errors.
+- `budget_exhausted` means the run ran out of network time and stopped on purpose. Everything it already claimed is kept; the remainder is left for the next run. Say so plainly — it is not a failure of the account.
 - Exit `0` success or normal no-op; `1` network, protocol, or business failure; `2` local login state missing or rejected.
 - On exit `2`, tell the user to open WorkBuddy and sign in again. Never ask them to paste a token into chat.
 - On `RUNTIME_NOT_FOUND`, the client could not be located: run `doctor`, and re-run with `WORKBUDDY_EXE` set if it is installed somewhere unusual.

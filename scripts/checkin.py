@@ -8,9 +8,10 @@ from http_client import Response, WorkBuddyClient, business_message, dig
 
 
 def _status_request(client: WorkBuddyClient) -> Response:
-    response = client.request("POST", "/v2/billing/meter/checkin-activity-status", payload={})
+    # A status query only reads, so it may be repeated on a transient failure.
+    response = client.request("POST", "/v2/billing/meter/checkin-activity-status", payload={}, retry_read=True)
     if response.http_status in (404, 405):
-        response = client.request("POST", "/v2/billing/meter/checkin-status", payload={})
+        response = client.request("POST", "/v2/billing/meter/checkin-status", payload={}, retry_read=True)
     return response
 
 
@@ -39,6 +40,8 @@ def _summary(body: Any) -> dict[str, Any]:
 
 def status(client: WorkBuddyClient) -> tuple[int, dict[str, Any]]:
     response = _status_request(client)
+    if response.budget_exhausted:
+        return 1, {"task": "checkin", "status": "failed", "reason": "budget_exhausted"}
     if response.network_error:
         return 1, {"task": "checkin", "status": "failed", "reason": "network_unavailable"}
     if response.http_status == 401:
@@ -56,6 +59,8 @@ def run(client: WorkBuddyClient) -> tuple[int, dict[str, Any]]:
     if code or current["status"] == "already_checked":
         return code, current
     response = client.request("POST", "/v2/billing/meter/daily-checkin", payload={})
+    if response.budget_exhausted:
+        return 1, {"task": "checkin", "status": "failed", "reason": "budget_exhausted"}
     if response.network_error:
         return 1, {"task": "checkin", "status": "failed", "reason": "ambiguous_network_result"}
     if response.http_status == 401:

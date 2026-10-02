@@ -27,6 +27,8 @@ def _request(client: WorkBuddyClient, method: str, suffix: str, payload: dict[st
 
 
 def _failure(response: Response) -> tuple[int, dict[str, Any]] | None:
+    if response.budget_exhausted:
+        return 1, {"task": "travel", "status": "failed", "reason": "budget_exhausted"}
     if response.network_error:
         return 1, {"task": "travel", "status": "failed", "reason": "network_unavailable"}
     if response.http_status == 401:

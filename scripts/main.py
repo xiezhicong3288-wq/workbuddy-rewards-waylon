@@ -28,6 +28,8 @@ SAFE_LOG_KEYS = {
     "unopened", "unopened_credit", "waiting", "waiting_credit", "accepted",
     "claimed", "pending", "pending_credit", "task_code", "title", "progress",
     "locked", "hint", "errors", "message",
+    # network budget
+    "budget_warning", "budget_exhausted",
 }
 
 
@@ -74,6 +76,16 @@ def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         return 0, {"task": "doctor", **inspect_auth()}
     session = load_session()
     client = WorkBuddyClient(session)
+    try:
+        code, result = _run_channels(args, client)
+    finally:
+        client.close()
+    if client.budget_warning:
+        result["budget_warning"] = client.budget_warning
+    return code, result
+
+
+def _run_channels(args: argparse.Namespace, client: WorkBuddyClient) -> tuple[int, dict[str, Any]]:
     if args.command == "status":
         ccode, cresult = checkin.status(client)
         tcode, tresult = travel.status(client)

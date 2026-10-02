@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import re
 import ssl
 import time
@@ -52,6 +53,34 @@ ALLOWED_PATH_PATTERNS = (
 # instead of reused, so a long --loop wait never writes into a dead socket.
 IDLE_REUSE_SECONDS = 30.0
 
+# One run gets a bounded network budget. Without it a bad network makes every call
+# wait for its timeout, the scheduled run is killed before it finishes, and the whole
+# day's outcome goes unrecorded. The budget must stay below the scheduler's own limit.
+DEFAULT_BUDGET_SECONDS = 420.0
+MAX_BUDGET_SECONDS = 540.0
+BUDGET_ENV = "WORKBUDDY_BUDGET_SECONDS"
+
+
+def resolve_budget_seconds() -> tuple[float, str | None]:
+    """Read the per-run network budget from the environment, clamped to a safe range.
+
+    Returns the seconds and, when the configured value was unusable, a short note so
+    the run can say it did not honour the request. A bad value must never disable the
+    guard, so it falls back instead of being trusted.
+    """
+    raw = (os.environ.get(BUDGET_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_BUDGET_SECONDS, None
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_BUDGET_SECONDS, f"{BUDGET_ENV} 不是数字，已改用默认 {DEFAULT_BUDGET_SECONDS:g} 秒"
+    if value <= 0:
+        return DEFAULT_BUDGET_SECONDS, f"{BUDGET_ENV} 不是正数，已改用默认 {DEFAULT_BUDGET_SECONDS:g} 秒"
+    if value > MAX_BUDGET_SECONDS:
+        return MAX_BUDGET_SECONDS, f"{BUDGET_ENV} 超过上限，已夹到 {MAX_BUDGET_SECONDS:g} 秒"
+    return value, None
+
 
 def _path_allowed(path: str) -> bool:
     if path in ALLOWED_PATHS:
@@ -64,6 +93,12 @@ class Response:
     http_status: int
     body: Any
     network_error: bool = False
+    budget_exhausted: bool = False
+
+
+def budget_exhausted(response: Response) -> bool:
+    """True when the run ran out of network time before this call was allowed."""
+    return response.budget_exhausted
 
 
 def dig(value: Any, key: str) -> Any:
@@ -79,13 +114,25 @@ def dig(value: Any, key: str) -> Any:
 
 
 class WorkBuddyClient:
-    def __init__(self, session: Session, timeout: float = 20.0):
+    def __init__(self, session: Session, timeout: float = 20.0, budget_seconds: float | None = None):
         self.session = session
         self.timeout = timeout
+        if budget_seconds is None:
+            self.budget_seconds, self.budget_warning = resolve_budget_seconds()
+        else:
+            self.budget_seconds = max(0.0, min(float(budget_seconds), MAX_BUDGET_SECONDS))
+            self.budget_warning = None
+        # The budget covers time spent waiting on the network, not time spent sleeping
+        # between --loop polls: a long wait for a Buddy to arrive must not consume it.
+        self._spent = 0.0
         self._ssl_context = ssl.create_default_context()
         self._connection: http.client.HTTPSConnection | None = None
         self._connection_host: str | None = None
         self._used_at = 0.0
+
+    def budget_left(self) -> float:
+        """Seconds of network time still available to this run."""
+        return max(0.0, self.budget_seconds - self._spent)
 
     def _target(self) -> tuple[str, int]:
         base = urllib.parse.urlsplit(self.session.api_base)
@@ -173,13 +220,28 @@ class WorkBuddyClient:
             raise ValueError("endpoint is not allowlisted")
         self._target()
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
-        attempts = 2 if retry_read and method.upper() in {"GET", "HEAD"} else 1
+        verb = method.upper()
+        read = verb in {"GET", "HEAD"}
+        attempts = 2 if retry_read and read else 1
         last = Response(-1, {"error": "network unavailable"}, network_error=True)
         for attempt in range(attempts):
+            if self.budget_left() <= 0:
+                return Response(-2, {"error": "budget exhausted"}, budget_exhausted=True)
+            started = time.monotonic()
             last = self._send(method, path, body)
-            if not last.network_error or attempt + 1 >= attempts:
+            self._spent += time.monotonic() - started
+            if last.budget_exhausted:
                 return last
-            time.sleep(1)
+            # A read may be repeated, and a server-side 5xx is as transient as a
+            # dropped socket. A write is never repeated, whatever the failure looks
+            # like, because the first attempt may already have been applied.
+            retryable = last.network_error or (read and 500 <= last.http_status < 600)
+            if not retryable or attempt + 1 >= attempts:
+                return last
+            remaining = self.budget_left()
+            if remaining <= 0:
+                return last
+            time.sleep(min(1.0, remaining))
         return last
 
 

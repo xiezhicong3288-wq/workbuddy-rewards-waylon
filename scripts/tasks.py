@@ -39,6 +39,8 @@ def _request(client: WorkBuddyClient, method: str, suffix: str, payload: dict[st
 
 
 def _failure(response: Response) -> tuple[int, dict[str, Any]] | None:
+    if response.budget_exhausted:
+        return 1, {"task": "tasks", "status": "failed", "reason": "budget_exhausted"}
     if response.network_error:
         return 1, {"task": "tasks", "status": "failed", "reason": "network_unavailable"}
     if response.http_status == 401:
@@ -214,6 +216,7 @@ def run(client: WorkBuddyClient, accept: bool = True) -> tuple[int, dict[str, An
                         task["status"] = statuses.get(task["task_code"], ACCEPTED)
     claimed: list[dict[str, Any]] = []
     refused: list[str] = []
+    out_of_budget = False
     for task in tasks:
         if task["status"] != COMPLETED:
             continue
@@ -223,6 +226,11 @@ def run(client: WorkBuddyClient, accept: bool = True) -> tuple[int, dict[str, An
         elif outcome == "pending":
             refused.append(task["task_code"])
         elif outcome == "failed" and detail:
+            # Running out of network time is a stop, not a failure: everything already
+            # claimed is kept and the rest is simply left for the next run.
+            if detail.get("reason") == "budget_exhausted":
+                out_of_budget = True
+                break
             errors.append(detail)
     # A task the server refuses to pay out is not claimable, however the list
     # described it a moment ago: report it as still waiting instead.
@@ -241,5 +249,7 @@ def run(client: WorkBuddyClient, accept: bool = True) -> tuple[int, dict[str, An
         board["claimed_credit"] = sum(item["reward_credit"] for item in claimed)
     if errors:
         board["errors"] = errors
+    if out_of_budget:
+        board["budget_exhausted"] = True
     board["status"] = "claimed" if claimed else ("nothing_to_claim" if not errors else "failed")
     return (1 if errors else 0), board

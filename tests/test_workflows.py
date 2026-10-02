@@ -455,19 +455,21 @@ class _FakeSocket:
 
 
 class _FakeConnection:
-    def __init__(self, host: str, port: int, fail_remaining: int = 0):
+    def __init__(self, host: str, port: int, fail_remaining: int = 0, statuses=None):
         self.host = host
         self.port = port
         self.requests: list[tuple] = []
         self.closed = False
         self.fail_remaining = fail_remaining
+        self.statuses = list(statuses or [200])
 
     def request(self, method, path, body=None, headers=None):
         self.requests.append((method, path, body))
         if self.fail_remaining > 0:
             self.fail_remaining -= 1
             raise http.client.RemoteDisconnected("connection closed")
-        self._pending = _FakeSocket(200, b'{"data":{}}')
+        status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+        self._pending = _FakeSocket(status, b'{"data":{}}')
 
     def getresponse(self):
         return self._pending
@@ -482,6 +484,7 @@ class ConnectionReuseTests(unittest.TestCase):
     def setUp(self):
         self.created: list[_FakeConnection] = []
         self.fail_remaining = 0
+        self.statuses = [200]
         self.session = credentials.Session(
             token="t", uid="u", domain=None, enterprise_id=None,
             api_base="https://copilot.tencent.com", credential_format="plaintext",
@@ -494,7 +497,7 @@ class ConnectionReuseTests(unittest.TestCase):
         # Only the first socket handed out fails; later ones must work, otherwise a
         # retry could never succeed.
         fail, self.fail_remaining = self.fail_remaining, 0
-        connection = _FakeConnection(host, port or 443, fail_remaining=fail)
+        connection = _FakeConnection(host, port or 443, fail_remaining=fail, statuses=self.statuses)
         self.created.append(connection)
         return connection
 
@@ -541,6 +544,61 @@ class ConnectionReuseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             client.request("GET", "/console/user/from")
         self.assertEqual(len(self.created), 0)
+
+    def test_read_retries_after_a_server_error(self):
+        self.statuses = [500, 200]
+        client = http_client.WorkBuddyClient(self.session)
+        response = client.request("GET", "/v2/activity/growth/tasks", retry_read=True)
+        self.assertEqual(response.http_status, 200)
+        self.assertEqual(len(self.created[0].requests), 2)
+
+    def test_exhausted_budget_stops_before_any_socket(self):
+        client = http_client.WorkBuddyClient(self.session, budget_seconds=0)
+        response = client.request("GET", "/v2/activity/growth/tasks", retry_read=True)
+        self.assertTrue(response.budget_exhausted)
+        self.assertEqual(len(self.created), 0)
+
+    def test_budget_counts_network_time_only(self):
+        # Sleeping between --loop polls must not consume the budget, or a long wait
+        # for a Buddy to arrive would starve the claim that follows it.
+        client = http_client.WorkBuddyClient(self.session, budget_seconds=10)
+        client._spent = 0.0
+        self.assertAlmostEqual(client.budget_left(), 10.0)
+        client._spent = 4.0
+        self.assertAlmostEqual(client.budget_left(), 6.0)
+        client._spent = 99.0
+        self.assertEqual(client.budget_left(), 0.0)
+
+
+class BudgetConfigTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop(http_client.BUDGET_ENV, None)
+
+    def test_default_is_used_when_unset(self):
+        value, warning = http_client.resolve_budget_seconds()
+        self.assertEqual(value, http_client.DEFAULT_BUDGET_SECONDS)
+        self.assertIsNone(warning)
+
+    def test_unusable_values_fall_back_safely(self):
+        # An empty value simply means "not configured", so it warns about nothing.
+        for raw in ("abc", "-5", "0"):
+            os.environ[http_client.BUDGET_ENV] = raw
+            value, warning = http_client.resolve_budget_seconds()
+            self.assertEqual(value, http_client.DEFAULT_BUDGET_SECONDS)
+            self.assertIsNotNone(warning)
+
+    def test_oversized_value_is_clamped_to_the_ceiling(self):
+        os.environ[http_client.BUDGET_ENV] = "99999"
+        value, warning = http_client.resolve_budget_seconds()
+        self.assertEqual(value, http_client.MAX_BUDGET_SECONDS)
+        self.assertIsNotNone(warning)
+
+    def test_valid_value_is_honoured(self):
+        os.environ[http_client.BUDGET_ENV] = "90"
+        self.assertEqual(http_client.resolve_budget_seconds(), (90.0, None))
 
 
 if __name__ == "__main__":
