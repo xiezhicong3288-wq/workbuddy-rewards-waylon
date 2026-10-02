@@ -11,8 +11,10 @@ tasks still unopened, then one claim per completed task.
 from __future__ import annotations
 
 import re
+import urllib.parse
 from typing import Any
 
+from credentials import ALLOWED_HOSTS
 from http_client import Response, WorkBuddyClient, business_message, dig
 
 
@@ -22,7 +24,29 @@ ACCEPT_SUFFIX = "/tasks/accept"
 CODE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 ACCEPT_BATCH = 50
 MAX_TASKS = 300
-HINT_LIMIT = 140
+HINT_LIMIT = 160
+LINK_LIMIT = 200
+
+
+def _safe_link(value: Any) -> str | None:
+    """Keep only links the desktop client can open on its own, or our own hosts.
+
+    The board carries a deep link per task (`workbuddy://...`) that jumps straight to
+    the screen where the task is done. It is server-controlled data, so anything that
+    is not the app's own scheme or an allowlisted host is dropped rather than repeated
+    to the user.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > LINK_LIMIT:
+        return None
+    parts = urllib.parse.urlsplit(text)
+    if parts.scheme == "workbuddy":
+        return text
+    if parts.scheme == "https" and parts.hostname in ALLOWED_HOSTS:
+        return text
+    return None
 
 CLAIMED = "claimed"
 COMPLETED = "completed"
@@ -94,9 +118,21 @@ def _normalize(raw: Any) -> dict[str, Any] | None:
         task["progress"] = f"{current}/{target}"
     if raw.get("locked") is True:
         task["locked"] = True
-    hint = _text(raw.get("task_desc")) or _text(raw.get("description"), HINT_LIMIT)
+    # `description` says how to do the task; `task_desc` is only a one-line label.
+    hint = _text(raw.get("description"), HINT_LIMIT) or _text(raw.get("task_desc"), HINT_LIMIT)
     if hint:
         task["hint"] = hint[:HINT_LIMIT]
+    link = _safe_link(raw.get("jump_url"))
+    if link:
+        task["jump_url"] = link
+    end = raw.get("valid_end")
+    if isinstance(end, str) and len(end) >= 10 and re.fullmatch(r"\d{4}-\d{2}-\d{2}", end[:10]):
+        task["until"] = end[:10]
+    tag = raw.get("tag")
+    if isinstance(tag, str) and tag.strip():
+        task["tag"] = _text(tag, 20)
+    if raw.get("is_new") is True:
+        task["new"] = True
     return task
 
 
@@ -131,6 +167,9 @@ def _summarize(tasks: list[dict[str, Any]]) -> dict[str, Any]:
         "unopened_credit": sum(task["reward_credit"] for task in unopened),
         "waiting": [task["task_code"] for task in waiting],
         "waiting_credit": sum(task["reward_credit"] for task in waiting),
+        # Rows appear and disappear between runs; the board is the only truth, so a
+        # freshly appeared task is worth calling out instead of silently accepting it.
+        "new": [task["task_code"] for task in tasks if task.get("new")],
     }
 
 
@@ -241,7 +280,11 @@ def run(client: WorkBuddyClient, accept: bool = True) -> tuple[int, dict[str, An
             return {**task, "status": CLAIMED}
         return task
 
-    board = _summarize([_relabel(task) for task in tasks])
+    relabelled = [_relabel(task) for task in tasks]
+    board = _summarize(relabelled)
+    # The rows carry the deep link and the deadline, and the caller needs them to tell
+    # the user where to go — so the board travels with the summary, not just its codes.
+    board["tasks"] = relabelled
     if accepted:
         board["accepted"] = accepted
     if claimed:

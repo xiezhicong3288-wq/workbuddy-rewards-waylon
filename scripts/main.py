@@ -28,6 +28,8 @@ SAFE_LOG_KEYS = {
     "unopened", "unopened_credit", "waiting", "waiting_credit", "accepted",
     "claimed", "pending", "pending_credit", "task_code", "title", "progress",
     "locked", "hint", "errors", "message",
+    # task board guidance surfaced to the user
+    "jump_url", "until", "tag", "new",
     # network budget
     "budget_warning", "budget_exhausted",
 }

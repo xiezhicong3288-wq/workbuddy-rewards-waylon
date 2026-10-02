@@ -570,6 +570,47 @@ class ConnectionReuseTests(unittest.TestCase):
         self.assertEqual(client.budget_left(), 0.0)
 
 
+class TaskFieldTests(unittest.TestCase):
+    """The board carries a deep link and a deadline per task; both must survive safely."""
+
+    def test_deep_links_are_surfaced(self):
+        client = FakeClient([_board(_task("chat_5", jump_url="workbuddy://chat"))])
+        _, result = tasks.status(client)
+        self.assertEqual(result["tasks"][0]["jump_url"], "workbuddy://chat")
+
+    def test_own_host_links_are_surfaced(self):
+        client = FakeClient([_board(_task("chat_5", jump_url="https://www.workbuddy.cn/events/follow-guide/"))])
+        _, result = tasks.status(client)
+        self.assertTrue(result["tasks"][0]["jump_url"].endswith("/events/follow-guide/"))
+
+    def test_unsafe_links_are_dropped(self):
+        client = FakeClient([_board(_task("chat_5", jump_url="javascript:alert(1)"))])
+        _, result = tasks.status(client)
+        self.assertNotIn("jump_url", result["tasks"][0])
+
+    def test_unknown_host_links_are_dropped(self):
+        for link in ("https://evil.example/x", "http://www.workbuddy.cn/x", "file:///etc/passwd"):
+            client = FakeClient([_board(_task("chat_5", jump_url=link))])
+            _, result = tasks.status(client)
+            self.assertNotIn("jump_url", result["tasks"][0], link)
+
+    def test_overlong_links_are_dropped(self):
+        client = FakeClient([_board(_task("chat_5", jump_url="workbuddy://" + "a" * 400))])
+        _, result = tasks.status(client)
+        self.assertNotIn("jump_url", result["tasks"][0])
+
+    def test_deadline_and_new_flag_are_surfaced(self):
+        client = FakeClient([_board(_task("chat_5", valid_end="2026-10-10T23:59:00+08:00", is_new=True))])
+        _, result = tasks.status(client)
+        self.assertEqual(result["tasks"][0]["until"], "2026-10-10")
+        self.assertEqual(result["new"], ["chat_5"])
+
+    def test_malformed_deadline_is_dropped(self):
+        client = FakeClient([_board(_task("chat_5", valid_end="not-a-date"))])
+        _, result = tasks.status(client)
+        self.assertNotIn("until", result["tasks"][0])
+
+
 class BudgetConfigTests(unittest.TestCase):
     def setUp(self):
         patcher = mock.patch.dict(os.environ, {}, clear=False)

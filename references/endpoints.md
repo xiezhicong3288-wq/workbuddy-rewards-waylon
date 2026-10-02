@@ -50,7 +50,17 @@ The 任务中心 lives at `https://www.workbuddy.cn/profile/growth-center` (an H
 - `POST /activity/growth/tasks/accept` with `{ "task_codes": [...] }` — opens progress tracking for one or many tasks (note: this suffix has no `/v2` sibling).
 - `POST /v2/activity/growth/tasks/{task_code}/claim` with `{}` — pays out one finished task. The code sits inside the path, so it is matched by pattern and cross-checked against the codes the list returned; anything else is refused before a request is built.
 
-A task row carries `task_code`, `title`, `task_desc` / `description`, `jump_url`, `reward_credit`, `accept_status`, `progress {current,target}`, `locked`. `accept_status` is one of `not_accepted`, `accepted`, `in_progress`, `completed`, `claimed`.
+A task row carries `task_code`, `title`, `task_desc` / `description`, `jump_url`, `valid_start` / `valid_end`, `tag`, `is_new`, `reward_credit`, `reward_energy`, `accept_status`, `progress {current,target}`, `locked`, plus button labels and `claimed_button_url` on a few rows. `accept_status` is one of `not_accepted`, `accepted`, `in_progress`, `completed`, `claimed`.
+
+Fields this skill surfaces, and why each earns its place in the output:
+
+- **`jump_url`** — a deep link that opens the desktop client on the screen where the task is done (`workbuddy://templates`, `workbuddy://settings/appearance`, `workbuddy://expert`, `workbuddy://library`, `workbuddy://playbook`, `workbuddy://skills`, `workbuddy://home?templateId=...`). Turning "open the menu, then appearance" into a link is the difference between telling the user what to hunt for and handing it to them. It is server-controlled data, so only the `workbuddy://` scheme and HTTPS URLs on the allowlisted hosts are repeated; anything else is dropped, never echoed.
+- **`valid_end`** — some tasks expire. Observed deadlines: `Buddy_App_QQ` 2026-10-10, `Hp_Appearance` 2026-11-02, `Expert_lighthouse` 2026-11-13. Others are `null`. Surface the date so an expiring task can be prioritised; never invent one for a row that has none.
+- **`description`** — preferred over `task_desc` for the hint, because it says *how* ("切换滑块到「设计创意」模式，并创建1个画布") rather than restating the title.
+- **`is_new`** — flags rows that appeared since the board last changed. Reported so a new task is announced instead of silently absorbed by the automatic accept.
+- **`tag`** — `PC`, `限定`, `限量` on some rows; informational only.
+
+Deliberately **not** surfaced: `claimed_button_url` / `reward_popup_redirect_url`, which point off-platform (`cloud.tencent.com`, `workbuddy.link`) to promotional redemption pages outside this skill's scope.
 
 Confirmed against the live API on 2026-10-01:
 
