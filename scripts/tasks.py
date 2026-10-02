@@ -26,6 +26,7 @@ HINT_LIMIT = 140
 
 CLAIMED = "claimed"
 COMPLETED = "completed"
+ACCEPTED = "accepted"
 NOT_ACCEPTED = "not_accepted"
 
 
@@ -139,22 +140,31 @@ def status(client: WorkBuddyClient) -> tuple[int, dict[str, Any]]:
     return 0, {**_summarize(tasks), "tasks": tasks}
 
 
-def _accept(client: WorkBuddyClient, codes: list[str]) -> tuple[list[str], dict[str, Any] | None]:
+def _accept(client: WorkBuddyClient, codes: list[str]) -> tuple[list[str], dict[str, str], dict[str, Any] | None]:
+    """Open progress tracking and report the codes plus the status the server gave each.
+
+    The returned statuses let the caller fold the outcome into the board it already
+    holds instead of paying for a second listing request.
+    """
     accepted: list[str] = []
+    statuses: dict[str, str] = {}
     for start in range(0, len(codes), ACCEPT_BATCH):
         batch = codes[start:start + ACCEPT_BATCH]
         response = _request(client, "POST", ACCEPT_SUFFIX, payload={"task_codes": batch})
         failed = _failure(response)
         if failed:
-            return accepted, {**failed[1], "status": "failed"}
+            return accepted, statuses, {**failed[1], "status": "failed"}
         results = dig(response.body, "results")
         if isinstance(results, list):
             for item in results:
                 if isinstance(item, dict) and isinstance(item.get("task_code"), str):
-                    accepted.append(item["task_code"])
+                    code = item["task_code"]
+                    accepted.append(code)
+                    if isinstance(item.get("status"), str):
+                        statuses[code] = item["status"]
         else:
             accepted.extend(batch)
-    return accepted, None
+    return accepted, statuses, None
 
 
 def _claim_task(client: WorkBuddyClient, task: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
@@ -190,13 +200,18 @@ def run(client: WorkBuddyClient, accept: bool = True) -> tuple[int, dict[str, An
     if accept:
         unopened = [task["task_code"] for task in tasks if task["status"] == NOT_ACCEPTED and not task.get("locked")]
         if unopened:
-            accepted, failure = _accept(client, unopened)
+            accepted, statuses, failure = _accept(client, unopened)
             if failure:
                 errors.append({k: v for k, v in failure.items() if k != "task"})
             if accepted:
-                code, refreshed, tasks = fetch(client)
-                if code:
-                    return code, refreshed
+                # Fold the accept answer into the board already in hand instead of
+                # paying for a second listing: a freshly accepted task starts at 0/n,
+                # so it cannot have become claimable. If the server does report a
+                # different status for one, that status wins.
+                opened = set(accepted)
+                for task in tasks:
+                    if task["task_code"] in opened:
+                        task["status"] = statuses.get(task["task_code"], ACCEPTED)
     claimed: list[dict[str, Any]] = []
     refused: list[str] = []
     for task in tasks:

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -232,17 +234,34 @@ class GrowthTaskTests(unittest.TestCase):
         self.assertEqual(result["unopened"], [])
         self.assertEqual(client.calls[0][1], "/v2/activity/growth/tasks")
 
-    def test_accept_opens_unopened_tasks_then_refreshes(self):
+    def test_accept_opens_unopened_tasks_without_relisting(self):
+        # Accepting cannot make a task claimable (counters start at 0/n), so the board
+        # already in hand is folded forward instead of listed a second time. FakeClient
+        # raises if a third request is attempted.
         client = FakeClient([
             _board(_task("chat_5")),
             Response(200, {"data": {"results": [{"task_code": "chat_5", "status": "accepted"}]}}),
-            _board(_task("chat_5", "accepted", 0, 5)),
         ])
         code, result = tasks.run(client)
         self.assertEqual(code, 0)
         self.assertEqual(result["accepted"], ["chat_5"])
         self.assertEqual(result["status"], "nothing_to_claim")
         self.assertEqual(client.calls[1][2], {"task_codes": ["chat_5"]})
+        self.assertEqual(len(client.calls), 2)
+
+    def test_accept_folds_server_status_into_board(self):
+        # If the server does report a different status for an accepted task, that
+        # status wins — so a task completed by accepting is claimed in the same run.
+        client = FakeClient([
+            _board(_task("chat_5")),
+            Response(200, {"data": {"results": [{"task_code": "chat_5", "status": "completed"}]}}),
+            Response(200, {"data": {"credit": 100}}),
+        ])
+        code, result = tasks.run(client)
+        self.assertEqual(code, 0)
+        self.assertEqual(result["accepted"], ["chat_5"])
+        self.assertEqual(result["claimed"], [{"task_code": "chat_5", "title": "标题-chat_5", "reward_credit": 100}])
+        self.assertEqual(client.calls[2][1], "/v2/activity/growth/tasks/chat_5/claim")
 
     def test_no_accept_leaves_tasks_untouched(self):
         client = FakeClient([_board(_task("chat_5"))])
@@ -423,6 +442,105 @@ class SecurityTests(unittest.TestCase):
     def test_untrusted_domain_falls_back(self):
         self.assertEqual(credentials._api_base({"domain": "evil.example"}), credentials.DEFAULT_BASE)
         self.assertEqual(credentials._api_base({"domain": "www.codebuddy.cn"}), "https://www.codebuddy.cn")
+
+
+class _FakeSocket:
+    def __init__(self, status: int, raw: bytes):
+        self.status = status
+        self.will_close = False
+        self._raw = raw
+
+    def read(self) -> bytes:
+        return self._raw
+
+
+class _FakeConnection:
+    def __init__(self, host: str, port: int, fail_remaining: int = 0):
+        self.host = host
+        self.port = port
+        self.requests: list[tuple] = []
+        self.closed = False
+        self.fail_remaining = fail_remaining
+
+    def request(self, method, path, body=None, headers=None):
+        self.requests.append((method, path, body))
+        if self.fail_remaining > 0:
+            self.fail_remaining -= 1
+            raise http.client.RemoteDisconnected("connection closed")
+        self._pending = _FakeSocket(200, b'{"data":{}}')
+
+    def getresponse(self):
+        return self._pending
+
+    def close(self):
+        self.closed = True
+
+
+class ConnectionReuseTests(unittest.TestCase):
+    """The client reuses one socket, but never at the cost of an ambiguous write."""
+
+    def setUp(self):
+        self.created: list[_FakeConnection] = []
+        self.fail_remaining = 0
+        self.session = credentials.Session(
+            token="t", uid="u", domain=None, enterprise_id=None,
+            api_base="https://copilot.tencent.com", credential_format="plaintext",
+        )
+        patcher = mock.patch.object(http.client, "HTTPSConnection", side_effect=self._make)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _make(self, host, port=None, context=None, timeout=None, **_kwargs):
+        # Only the first socket handed out fails; later ones must work, otherwise a
+        # retry could never succeed.
+        fail, self.fail_remaining = self.fail_remaining, 0
+        connection = _FakeConnection(host, port or 443, fail_remaining=fail)
+        self.created.append(connection)
+        return connection
+
+    def test_requests_share_one_connection(self):
+        client = http_client.WorkBuddyClient(self.session)
+        client.request("GET", "/v2/activity/growth/tasks", retry_read=True)
+        client.request("GET", "/v2/activity/growth/tasks", retry_read=True)
+        client.request("POST", "/activity/growth/tasks/accept", payload={"task_codes": ["a"]})
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(len(self.created[0].requests), 3)
+
+    def test_read_retries_on_a_fresh_connection(self):
+        self.fail_remaining = 1
+        client = http_client.WorkBuddyClient(self.session)
+        response = client.request("GET", "/v2/activity/growth/tasks", retry_read=True)
+        self.assertEqual(response.http_status, 200)
+        self.assertEqual(len(self.created), 2)
+
+    def test_write_is_never_resent_on_a_new_connection(self):
+        # A dead socket could already have delivered the write, so the run must stop
+        # with an ambiguous result rather than open another socket and send it again.
+        self.fail_remaining = 1
+        client = http_client.WorkBuddyClient(self.session)
+        response = client.request("POST", "/activity/growth/tasks/accept", payload={"task_codes": ["a"]})
+        self.assertTrue(response.network_error)
+        self.assertEqual(len(self.created), 1)
+
+    def test_idle_connection_is_replaced(self):
+        client = http_client.WorkBuddyClient(self.session)
+        client.request("GET", "/v2/activity/growth/tasks", retry_read=True)
+        client._used_at -= http_client.IDLE_REUSE_SECONDS + 1
+        client.request("GET", "/v2/activity/growth/tasks", retry_read=True)
+        self.assertEqual(len(self.created), 2)
+        self.assertTrue(self.created[0].closed)
+
+    def test_close_releases_the_socket(self):
+        client = http_client.WorkBuddyClient(self.session)
+        client.request("GET", "/v2/activity/growth/tasks", retry_read=True)
+        client.close()
+        self.assertTrue(self.created[0].closed)
+
+    def test_rejected_path_never_opens_a_socket(self):
+        client = http_client.WorkBuddyClient(self.session)
+        with self.assertRaises(ValueError):
+            client.request("GET", "/console/user/from")
+        self.assertEqual(len(self.created), 0)
 
 
 if __name__ == "__main__":
