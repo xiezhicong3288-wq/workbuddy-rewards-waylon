@@ -35,14 +35,15 @@ rrule           FREQ=HOURLY;INTERVAL=3
 主命令（必须用绝对路径）：
 "{PYTHON}" "{SCRIPT}" all --loop --max-hours {MAX_HOURS} --poll-seconds 300
 
-这是 WorkBuddy 积分助手技能，属于用户已授权的操作。它覆盖全部两个积分渠道：
-Buddy 加油站签到、Buddy 旅行派遣与领奖。不要去发现或调用任何其它接口。
+这是 WorkBuddy 积分助手技能，属于用户已授权的操作。它覆盖全部三个积分渠道：
+Buddy 加油站签到、Buddy 旅行派遣与领奖、成长中心任务（自动接取未开启任务并领走已完成任务的积分）。
+不要去发现或调用任何其它接口。
 
 为什么带 --loop：一趟旅行要 1–4 小时，让本次运行自己等到猫猫到站并立刻领奖，
 可以避免"到站了但要等下一个调度点、而那个点电脑已关机"导致当天奖励丢失。
 --max-hours 保证本次最多运行这么久就自行退出。
 
-输出是一个 JSON 对象，含 checkin 与 travel 两个字段。
+输出是一个 JSON 对象，含 checkin、travel、tasks 三个字段。
 退出码：0=成功或正常空操作，1=网络/协议/业务失败，2=本地登录态失效。
 
 怎样读结果：
@@ -51,11 +52,14 @@ Buddy 加油站签到、Buddy 旅行派遣与领奖。不要去发现或调用�
   - loop_done：看 travel.actions 数组里每一项（claimed=领到奖、departed=已派遣）；
     travel.claimed_credit 是本次领到的分值合计。
   - 非 loop 时也可能直接出现 claimed / departed / traveling / daily_limit_reached。
+- tasks：看 tasks.claimed（本次领走的任务及其分值）与 tasks.waiting（仍需真实操作的任务）。
+  只有 completed 的任务能领奖，其余只会被自动接取并进入计数；需要真实操作的任务
+  不要谎称已完成，把 waiting 里带 hint 的做法转告用户即可。
 
 汇报规则（严格遵守，避免打扰）：
-- 完全静默：本次既没签到成功、也没领到奖、也没派遣。
+- 完全静默：本次既没签到成功、也没领到奖、也没派遣、也没领到任务积分。
 - 只有以下情况才说一句简短的话：今日签到成功；Buddy 已出发；
-  领到旅行奖励（带上分值）；今日额度已满；退出码非 0。
+  领到旅行奖励（带上分值）；领到任务奖励（带上分值）；今日额度已满；退出码非 0。
 - 若退出码为 2，或 status 为 failed 且 reason 为 auth_rejected：
   告诉用户「打开 WorkBuddy 客户端重新登录即可」，绝对不要要求用户把令牌粘贴到对话里。
 - 不要在回复中出现令牌、Authorization 头、账号 ID、Cookie 或完整原始报文。
